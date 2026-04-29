@@ -1,0 +1,114 @@
+# Session Requests Implementation Plan
+
+This plan details the steps required to implement the session request feature between students and mentors, update the skills dashboard visibility for mentors, and enhance the session creation form.
+
+## 1. Database Schema Updates
+
+### `server/models/SessionRequest.js` (New Model)
+We need a new model to track requests made by students to mentors.
+```javascript
+import mongoose from "mongoose";
+
+const sessionRequestSchema = new mongoose.Schema({
+  student: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  mentor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  status: { type: String, enum: ["pending", "accepted", "rejected"], default: "pending" },
+}, { timestamps: true });
+
+export default mongoose.model("SessionRequest", sessionRequestSchema);
+```
+
+### `server/models/Session.js`
+Add a new field to track the skills discussed during a session:
+```javascript
+// Add inside the sessionSchema:
+skillsDiscussed: {
+  type: [String],
+  default: []
+}
+```
+
+## 2. Backend API Changes
+
+### `server/controllers/requestController.js` (New)
+*   `createRequest`: Creates a new `SessionRequest` with status `pending`.
+*   `getMentorRequests`: Fetches all requests where the `mentor` matches the logged-in user.
+*   `updateRequestStatus`: Updates the status to `accepted` or `rejected`.
+
+### `server/routes/requestRoutes.js` (New)
+*   `POST /` -> `createRequest` (Requires `student` role)
+*   `GET /mentor` -> `getMentorRequests` (Requires `mentor` role)
+*   `PUT /:id/status` -> `updateRequestStatus` (Requires `mentor` role)
+
+### `server/server.js`
+*   Register the new route: `app.use("/api/requests", requestRoutes);`
+
+### `server/controllers/sessionController.js`
+*   Update the `createSession` function to accept and save the `skillsDiscussed` field.
+
+## 3. Frontend Service Updates
+
+### `client/src/services/requestService.js` (New)
+Add API helper functions using Axios to communicate with the backend:
+*   `createRequest(mentorId)`
+*   `fetchMentorRequests()`
+*   `updateRequestStatus(requestId, status)`
+
+### `client/src/services/sessionService.js`
+*   Update `createSession` payload to include `skillsDiscussed`.
+
+## 4. Frontend UI - Skills Dashboard (`SkillsDashboard.jsx`)
+
+1.  **Hide "No mentor matches" from Mentors:**
+    Change the rendering logic to only show the "No mentor matches yet. Add more skills." fallback if the user is not a mentor.
+    ```javascript
+    {matches.length ? (
+      // Mentor cards
+    ) : user.role !== "mentor" ? (
+      <div className="card">No mentor matches yet. Add more skills.</div>
+    ) : null}
+    ```
+2.  **Add "Request Session" Button:**
+    In the mentor card loop (`matches.map(...)`), add a button:
+    ```javascript
+    <button className="secondary-button" onClick={() => handleRequestSession(mentor._id)}>
+      Request Session
+    </button>
+    ```
+    This button will trigger `createRequest(mentor._id)` and show a success toast.
+
+## 5. Frontend UI - Mentor Requests Page
+
+1.  **New Page: `client/src/pages/mentor/MentorRequests.jsx`**
+    *   Fetch requests via `fetchMentorRequests()`.
+    *   Compute stats: Total Accepted (`status === 'accepted'`), Total Rejected (`status === 'rejected'`).
+    *   Display a stats section at the top.
+    *   List all `pending` requests with two buttons: **Accept** and **Reject**.
+    *   **On Reject Click:** Call API to update status to `rejected`, then silently remove the request from the pending list.
+    *   **On Accept Click:** Call API to update status to `accepted`, then navigate the user to the session creation page with the student ID pre-filled: `navigate('/sessions?studentId=' + request.student._id)`.
+2.  **Routing (`App.jsx`):** Add `<Route element={<MentorRequests />} path="/mentor/requests" />` inside the mentor's protected routes.
+3.  **Navigation (`Sidebar.jsx`):** Add a link to `/mentor/requests` for users with the `mentor` role.
+
+## 6. Frontend UI - Session Page (`SessionPage.jsx`)
+
+1.  **Pre-fill Student ID:**
+    Import `useLocation` from `react-router-dom` to extract `studentId` from the URL parameters. Use this value to initialize `form.student`.
+    ```javascript
+    const searchParams = new URLSearchParams(useLocation().search);
+    const initialStudentId = searchParams.get('studentId') || "";
+    // Set this as the initial value for student in the form state
+    ```
+2.  **Skills Discussed Input:**
+    Add a new text input to the form for "Skills Discussed" (comma-separated).
+    ```javascript
+    <label>
+      Skills discussed
+      <input 
+        placeholder="e.g. React, Node.js"
+        onChange={(event) => setForm(current => ({ ...current, skillsDiscussed: event.target.value }))}
+        value={form.skillsDiscussed}
+      />
+    </label>
+    ```
+3.  **Submission:**
+    Split the comma-separated `skillsDiscussed` string into an array and send it to the `createSession` API call.
